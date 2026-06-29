@@ -59,7 +59,7 @@ export async function GET(
   ];
 
   const csvRows = (logs ?? []).map((row) => {
-    const j = row.journeys as { status: string; started_at: string; completed_at: string | null } | null;
+    const j = (Array.isArray(row.journeys) ? row.journeys[0] : row.journeys) as { status: string; started_at: string; completed_at: string | null } | null;
     return [
       csvEscape(truck.chassis_number),
       csvEscape(formatUTC(row.logged_at)),
