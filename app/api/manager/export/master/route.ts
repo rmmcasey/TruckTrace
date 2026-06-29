@@ -61,7 +61,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const truck = truckMap.get(log.truck_id);
     if (!truck) continue;
 
-    const j = log.journeys as {
+    const j = (Array.isArray(log.journeys) ? log.journeys[0] : log.journeys) as {
       status: string;
       started_at: string;
       completed_at: string | null;

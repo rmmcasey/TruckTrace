@@ -116,7 +116,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       new Set(
         (completedJourneys ?? [])
           .map((j) => {
-            const t = j.trucks as { chassis_number: string } | null;
+            const t = (Array.isArray(j.trucks) ? j.trucks[0] : j.trucks) as { chassis_number: string } | null;
             return t?.chassis_number ?? null;
           })
           .filter(Boolean) as string[]

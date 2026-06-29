@@ -55,7 +55,7 @@ export async function GET(
 
   const enrichedLogs = logs.map((log) => {
     const journey = journeyMap.get(log.journey_id);
-    const driverJoin = log.drivers as { name: string } | null;
+    const driverJoin = (Array.isArray(log.drivers) ? log.drivers[0] : log.drivers) as { name: string } | null;
     return {
       id: log.id,
       resolved_address: log.resolved_address,
