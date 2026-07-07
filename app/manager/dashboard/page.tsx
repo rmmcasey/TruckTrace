@@ -331,13 +331,13 @@ export default function ManagerDashboardPage() {
               <span className="text-xs text-gray-500 truncate">
                 Driver link:{" "}
                 <span className="font-mono text-blue-600">
-                  https://trucktrace.net/driver?dealer={slug}
+                  https://truck-trace.vercel.app/driver?dealer={slug}
                 </span>
               </span>
               <button
                 onClick={() => {
                   navigator.clipboard
-                    .writeText(`https://trucktrace.net/driver?dealer=${slug}`)
+                    .writeText(`https://truck-trace.vercel.app/driver?dealer=${slug}`)
                     .then(() => {
                       setLinkCopied(true);
                       setTimeout(() => setLinkCopied(false), 2000);

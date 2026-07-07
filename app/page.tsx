@@ -17,15 +17,6 @@ export default function LandingPage() {
         <h2 className="text-4xl font-bold text-gray-900 mb-4 tracking-tight">
           Fleet tracking,<br />simplified.
         </h2>
-        <p className="text-lg text-gray-500 max-w-md mb-10">
-          Real-time GPS location logging for your vehicle fleet. Drivers check in from any phone — no app required.
-        </p>
-        <Link
-          href="/signup"
-          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-4 rounded-xl text-base transition-colors"
-        >
-          Get Started Free
-        </Link>
       </div>
     </main>
   );
