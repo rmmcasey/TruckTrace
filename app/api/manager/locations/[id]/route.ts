@@ -11,7 +11,7 @@ export async function PATCH(
 
   const locationId = params.id;
   const body = await req.json();
-  const { name, latitude, longitude, tan_number, active } = body;
+  const { name, tan_number, active } = body;
 
   // Verify ownership
   const { data: existing } = await supabase
@@ -35,8 +35,6 @@ export async function PATCH(
 
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (name !== undefined) update.name = name.trim();
-  if (latitude !== undefined) update.latitude = latitude;
-  if (longitude !== undefined) update.longitude = longitude;
   if (tan_number !== undefined) update.tan_number = tan_number.trim();
   if (active !== undefined) update.active = active;
 
@@ -45,7 +43,7 @@ export async function PATCH(
     .update(update)
     .eq("id", locationId)
     .eq("manager_id", manager.managerId)
-    .select("id, name, latitude, longitude, tan_number, active, updated_at")
+    .select("id, name, tan_number, active, updated_at")
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

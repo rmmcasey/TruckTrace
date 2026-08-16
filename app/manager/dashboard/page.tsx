@@ -16,8 +16,6 @@ interface TruckRow {
 interface LocationRow {
   id: string;
   name: string;
-  latitude: number;
-  longitude: number;
   tan_number: string;
   active: boolean;
 }
@@ -95,7 +93,7 @@ export default function ManagerDashboardPage() {
   const [locationsError, setLocationsError] = useState("");
   const [editingLoc, setEditingLoc] = useState<LocationRow | null>(null);
   const [showAddLocForm, setShowAddLocForm] = useState(false);
-  const [locForm, setLocForm] = useState({ name: "", latitude: "", longitude: "", tan_number: "" });
+  const [locForm, setLocForm] = useState({ name: "", tan_number: "" });
   const [locFormLoading, setLocFormLoading] = useState(false);
   const [locFormError, setLocFormError] = useState("");
 
@@ -195,29 +193,26 @@ export default function ManagerDashboardPage() {
   async function handleLocFormSubmit(e: FormEvent) {
     e.preventDefault();
     setLocFormError("");
-    const lat = parseFloat(locForm.latitude);
-    const lng = parseFloat(locForm.longitude);
-    if (isNaN(lat) || isNaN(lng)) { setLocFormError("Invalid coordinates"); return; }
     setLocFormLoading(true);
     try {
       if (editingLoc) {
         const res = await fetch(`/api/manager/locations/${editingLoc.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json", ...authHeader() },
-          body: JSON.stringify({ name: locForm.name, latitude: lat, longitude: lng, tan_number: locForm.tan_number }),
+          body: JSON.stringify({ name: locForm.name, tan_number: locForm.tan_number }),
         });
         if (!res.ok) { const d = await res.json(); setLocFormError(d.error ?? "Failed"); return; }
       } else {
         const res = await fetch("/api/manager/locations", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeader() },
-          body: JSON.stringify({ name: locForm.name, latitude: lat, longitude: lng, tan_number: locForm.tan_number }),
+          body: JSON.stringify({ name: locForm.name, tan_number: locForm.tan_number }),
         });
         if (!res.ok) { const d = await res.json(); setLocFormError(d.error ?? "Failed"); return; }
       }
       setEditingLoc(null);
       setShowAddLocForm(false);
-      setLocForm({ name: "", latitude: "", longitude: "", tan_number: "" });
+      setLocForm({ name: "", tan_number: "" });
       fetchLocations();
     } catch { setLocFormError("Something went wrong."); }
     finally { setLocFormLoading(false); }
@@ -469,7 +464,7 @@ export default function ManagerDashboardPage() {
               <button
                 onClick={() => {
                   setEditingLoc(null);
-                  setLocForm({ name: "", latitude: "", longitude: "", tan_number: "" });
+                  setLocForm({ name: "", tan_number: "" });
                   setLocFormError("");
                   setShowAddLocForm(true);
                 }}
@@ -494,8 +489,8 @@ export default function ManagerDashboardPage() {
                 <h3 className="text-sm font-semibold text-gray-900">
                   {editingLoc ? `Edit: ${editingLoc.name}` : "Add New Location"}
                 </h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="col-span-2">
+                <div className="space-y-3">
+                  <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Name</label>
                     <input
                       type="text"
@@ -507,28 +502,6 @@ export default function ManagerDashboardPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Latitude</label>
-                    <input
-                      type="text"
-                      required
-                      value={locForm.latitude}
-                      onChange={(e) => setLocForm((f) => ({ ...f, latitude: e.target.value }))}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="-33.8688"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Longitude</label>
-                    <input
-                      type="text"
-                      required
-                      value={locForm.longitude}
-                      onChange={(e) => setLocForm((f) => ({ ...f, longitude: e.target.value }))}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="151.2093"
-                    />
-                  </div>
-                  <div className="col-span-2">
                     <label className="block text-xs font-medium text-gray-600 mb-1">TAN Number</label>
                     <input
                       type="text"
@@ -540,9 +513,6 @@ export default function ManagerDashboardPage() {
                     />
                   </div>
                 </div>
-                <p className="text-xs text-gray-400">
-                  Get coordinates by right-clicking a point in Google Maps and selecting the coordinate.
-                </p>
                 {locFormError && (
                   <p className="text-xs text-red-600">{locFormError}</p>
                 )}
@@ -571,17 +541,16 @@ export default function ManagerDashboardPage() {
                   <tr className="bg-gray-50 border-b border-gray-200 text-left">
                     <th className="px-4 py-3 font-semibold text-gray-600">Name</th>
                     <th className="px-4 py-3 font-semibold text-gray-600">TAN</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Coordinates</th>
                     <th className="px-4 py-3 font-semibold text-gray-600">Status</th>
                     <th className="px-4 py-3 font-semibold text-gray-600"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {locationsLoading && (
-                    <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">Loading…</td></tr>
+                    <tr><td colSpan={4} className="px-4 py-10 text-center text-gray-400">Loading…</td></tr>
                   )}
                   {!locationsLoading && locations.length === 0 && (
-                    <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">No locations yet. Add one to get started.</td></tr>
+                    <tr><td colSpan={4} className="px-4 py-10 text-center text-gray-400">No locations yet. Add one to get started.</td></tr>
                   )}
                   {!locationsLoading && locations.map((loc) => (
                     <tr
@@ -590,9 +559,6 @@ export default function ManagerDashboardPage() {
                     >
                       <td className="px-4 py-3 font-medium text-gray-900">{loc.name}</td>
                       <td className="px-4 py-3 font-mono text-gray-700">{loc.tan_number}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                        {loc.latitude.toFixed(5)}, {loc.longitude.toFixed(5)}
-                      </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                           loc.active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
@@ -608,8 +574,6 @@ export default function ManagerDashboardPage() {
                               setShowAddLocForm(false);
                               setLocForm({
                                 name: loc.name,
-                                latitude: String(loc.latitude),
-                                longitude: String(loc.longitude),
                                 tan_number: loc.tan_number,
                               });
                               setLocFormError("");
