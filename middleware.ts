@@ -1,37 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jwtVerify } from "jose";
 
-// Decodes JWT payload without verifying signature — for routing only.
-// Cryptographic verification still happens in every API route handler.
-function decodeJwtPayload(token: string): { role?: string } | null {
+function secret(): Uint8Array {
+  return new TextEncoder().encode(process.env.JWT_SECRET!);
+}
+
+async function verifiedRole(token: string | undefined): Promise<string | null> {
+  if (!token) return null;
   try {
-    const base64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(atob(base64));
+    const { payload } = await jwtVerify(token, secret());
+    return (payload.role as string) ?? null;
   } catch {
     return null;
   }
 }
 
-export function middleware(req: NextRequest): NextResponse {
+export async function middleware(req: NextRequest): Promise<NextResponse> {
   const { pathname } = req.nextUrl;
 
   if (pathname.startsWith("/admin/dashboard")) {
-    const token = req.cookies.get("trucktrace_admin_token")?.value;
-    const payload = token ? decodeJwtPayload(token) : null;
-    if (!payload || payload.role !== "admin") {
+    const role = await verifiedRole(req.cookies.get("trucktrace_admin_token")?.value);
+    if (role !== "admin") {
       return NextResponse.redirect(new URL("/admin", req.url));
     }
     return NextResponse.next();
   }
 
-  // /manager/dashboard
-  const token = req.cookies.get("trucktrace_token")?.value;
-  const payload = token ? decodeJwtPayload(token) : null;
-  if (!payload || payload.role !== "manager") {
+  // Covers /manager/dashboard and /manager/trucks/*/timeline
+  const role = await verifiedRole(req.cookies.get("trucktrace_token")?.value);
+  if (role !== "manager") {
     return NextResponse.redirect(new URL("/manager", req.url));
   }
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ["/manager/dashboard", "/admin/dashboard"],
+  matcher: [
+    "/manager/dashboard",
+    "/manager/dashboard/:path*",
+    "/manager/trucks/:path*",
+    "/admin/dashboard",
+    "/admin/dashboard/:path*",
+  ],
 };
