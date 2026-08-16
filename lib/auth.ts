@@ -13,6 +13,12 @@ export interface AdminPayload {
   role: "admin";
 }
 
+export interface DealerSessionPayload {
+  role: "dealer_session";
+  managerId: string;
+  slug: string;
+}
+
 function secret(): Uint8Array {
   return new TextEncoder().encode(process.env.JWT_SECRET!);
 }
@@ -33,6 +39,16 @@ export async function signAdminToken(): Promise<string> {
   return new SignJWT({ role: "admin" })
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime("8h")
+    .sign(secret());
+}
+
+export async function signDealerToken(data: {
+  managerId: string;
+  slug: string;
+}): Promise<string> {
+  return new SignJWT({ role: "dealer_session", ...data })
+    .setProtectedHeader({ alg: "HS256" })
+    .setExpirationTime("4h")
     .sign(secret());
 }
 
@@ -62,4 +78,10 @@ export async function requireAdmin(req: NextRequest): Promise<AdminPayload | nul
     : (req.cookies.get("trucktrace_admin_token")?.value ?? null);
   const payload = token ? await verifyToken(token) : null;
   return payload?.role === "admin" ? (payload as AdminPayload) : null;
+}
+
+export async function requireDealerSession(req: NextRequest): Promise<DealerSessionPayload | null> {
+  const token = req.cookies.get("trucktrace_driver_token")?.value ?? null;
+  const payload = token ? await verifyToken(token) : null;
+  return payload?.role === "dealer_session" ? (payload as DealerSessionPayload) : null;
 }

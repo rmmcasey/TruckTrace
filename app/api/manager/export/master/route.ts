@@ -24,8 +24,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
   const { managerId } = manager;
 
-  const HEADER =
-    "chassis_number,truck_status,truck_deleted_at,timestamp,driver_name,address,latitude,longitude,journey_id,journey_status,journey_started_at,journey_completed_at";
+  const HEADER = "chassis_number,truck_status,location_name,tan_number,logged_at,method,distance_meters";
 
   const { data: trucks, error: trucksError } = await supabase
     .from("trucks")
@@ -45,10 +44,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const { data: logs, error: logsError } = await supabase
     .from("location_logs")
-    .select(
-      "truck_id, driver_name, resolved_address, latitude, longitude, logged_at, journey_id, journeys(status, started_at, completed_at)"
-    )
+    .select("truck_id, location_id, tan_number_snapshot, method, distance_meters, logged_at, locations(name)")
     .in("truck_id", trucks.map((t) => t.id))
+    .not("location_id", "is", null)
     .order("logged_at", { ascending: true });
 
   if (logsError) {
@@ -61,28 +59,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const truck = truckMap.get(log.truck_id);
     if (!truck) continue;
 
-    const j = (Array.isArray(log.journeys) ? log.journeys[0] : log.journeys) as {
-      status: string;
-      started_at: string;
-      completed_at: string | null;
-    } | null;
+    const locJoin = (Array.isArray(log.locations) ? log.locations[0] : log.locations) as
+      | { name: string }
+      | null;
 
     const truckStatus = truck.deleted_at ? "deleted" : truck.status;
 
     rows.push(
       [
-        truck.chassis_number,
-        truckStatus,
-        formatUTC(truck.deleted_at),
-        formatUTC(log.logged_at),
-        esc(log.driver_name),
-        esc(log.resolved_address),
-        log.latitude,
-        log.longitude,
-        log.journey_id,
-        j?.status ?? "",
-        formatUTC(j?.started_at),
-        formatUTC(j?.completed_at),
+        esc(truck.chassis_number),
+        esc(truckStatus),
+        esc(locJoin?.name ?? log.tan_number_snapshot ?? ""),
+        esc(log.tan_number_snapshot),
+        esc(formatUTC(log.logged_at)),
+        esc(log.method),
+        log.distance_meters ?? "",
       ].join(",")
     );
   }

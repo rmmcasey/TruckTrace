@@ -1,35 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { reverseGeocode } from "@/lib/opencage";
-import { pinRatelimit } from "@/lib/ratelimit";
+import { requireDealerSession } from "@/lib/auth";
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  if (pinRatelimit) {
-    const ip = req.headers.get("x-forwarded-for") ?? "127.0.0.1";
-    const { success } = await pinRatelimit.limit(ip);
-    if (!success) {
-      return NextResponse.json({ error: "Too many requests" }, { status: 429 });
-    }
+  const session = await requireDealerSession(req);
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { pin, chassisNumber, latitude, longitude, accuracy } = await req.json();
+  const { chassisNumber, locationId, method, distanceMeters } = await req.json();
 
-  const { data: driver } = await supabase
-    .from("drivers")
-    .select("id, name, manager_id")
-    .eq("pin", pin)
-    .is("deleted_at", null)
-    .single();
-
-  if (!driver) {
-    return NextResponse.json({ error: "Invalid PIN" }, { status: 401 });
+  if (!chassisNumber || !locationId || !method) {
+    return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+  }
+  if (method !== "auto" && method !== "manual") {
+    return NextResponse.json({ error: "Invalid method" }, { status: 400 });
   }
 
   const { data: truck } = await supabase
     .from("trucks")
     .select("id")
     .eq("chassis_number", chassisNumber)
-    .eq("manager_id", driver.manager_id)
+    .eq("manager_id", session.managerId)
     .eq("status", "active")
     .is("deleted_at", null)
     .single();
@@ -38,41 +30,46 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Invalid truck" }, { status: 404 });
   }
 
-  const truckId = truck.id;
-  const address = await reverseGeocode(latitude, longitude);
-
-  let { data: journey } = await supabase
-    .from("journeys")
-    .select("id")
-    .eq("truck_id", truckId)
-    .eq("status", "in_progress")
+  const { data: location } = await supabase
+    .from("locations")
+    .select("id, name, tan_number")
+    .eq("id", locationId)
+    .eq("manager_id", session.managerId)
+    .eq("active", true)
     .single();
 
-  if (!journey) {
-    const { data: newJourney } = await supabase
-      .from("journeys")
-      .insert({ truck_id: truckId, status: "in_progress", started_at: new Date().toISOString() })
-      .select("id")
-      .single();
-    journey = newJourney;
+  if (!location) {
+    return NextResponse.json({ error: "Invalid location" }, { status: 404 });
   }
 
-  const { error: insertError } = await supabase.from("location_logs").insert({
-    truck_id: truckId,
-    journey_id: journey!.id,
-    driver_id: driver.id,
-    driver_name: driver.name,
-    latitude,
-    longitude,
-    resolved_address: address,
-    logged_at: new Date().toISOString(),
-    accuracy_meters: accuracy ?? null,
+  const now = new Date().toISOString();
+
+  const { error: logError } = await supabase.from("location_logs").insert({
+    truck_id: truck.id,
+    location_id: location.id,
+    tan_number_snapshot: location.tan_number,
+    method,
+    distance_meters: typeof distanceMeters === "number" ? Math.round(distanceMeters) : null,
+    logged_at: now,
   });
 
-  if (insertError) {
-    console.error("[location] insert failed:", insertError.message);
-    return NextResponse.json({ success: false, error: "Failed to log location" }, { status: 500 });
+  if (logError) {
+    console.error("[location] insert failed:", logError.message);
+    return NextResponse.json({ error: "Failed to log location" }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true, address });
+  await supabase
+    .from("trucks")
+    .update({
+      current_location_id: location.id,
+      location_logged_at: now,
+      location_method: method,
+    })
+    .eq("id", truck.id);
+
+  return NextResponse.json({
+    success: true,
+    locationName: location.name,
+    tanNumber: location.tan_number,
+  });
 }

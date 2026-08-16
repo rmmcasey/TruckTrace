@@ -1,33 +1,25 @@
 "use client";
 
-import { useState, useEffect, useCallback, FormEvent } from "react";
+import { useState, useEffect, useCallback, FormEvent, useRef } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 
 interface TruckRow {
   truck_id: string;
   chassis_number: string;
-  driver_name: string;
-  last_known_address: string | null;
-  last_updated: string | null;
+  status: string;
+  location_name: string | null;
+  tan_number: string | null;
+  location_logged_at: string | null;
+  location_method: "auto" | "manual" | null;
 }
 
-interface DriverRow {
+interface LocationRow {
   id: string;
   name: string;
-  pin: string;
-  created_at: string;
-}
-
-interface RecordRow {
-  id: string;
-  chassis_number: string;
-  status: string;
-  deleted_at: string | null;
-  created_at: string;
-  last_driver: string | null;
-  last_known_location: string | null;
-  last_updated: string | null;
+  latitude: number;
+  longitude: number;
+  tan_number: string;
+  active: boolean;
 }
 
 function getCookie(name: string): string | null {
@@ -41,10 +33,7 @@ function authHeader() {
 
 function formatDate(iso: string | null) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
+  return new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -55,58 +44,72 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
-const recordStatusBadge: Record<string, string> = {
-  active: "bg-green-100 text-green-800",
-  inactive: "bg-amber-100 text-amber-800",
-  deleted: "bg-gray-100 text-gray-500",
-};
+// ── CSV helpers ──────────────────────────────────────────────────────────────
+
+function parseCsvHeaders(raw: string): { headers: string[]; rows: string[][] } {
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length === 0) return { headers: [], rows: [] };
+  const parse = (line: string): string[] => {
+    const result: string[] = [];
+    let cur = "";
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQ = !inQ; continue; }
+      if (c === "," && !inQ) { result.push(cur); cur = ""; continue; }
+      cur += c;
+    }
+    result.push(cur);
+    return result;
+  };
+  const headers = parse(lines[0]);
+  const rows = lines.slice(1).map(parse);
+  return { headers, rows };
+}
+
+// ── Main component ───────────────────────────────────────────────────────────
 
 export default function ManagerDashboardPage() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<"fleet" | "records" | "drivers">("fleet");
-  const [companyName, setCompanyName] = useState<string>("");
-  const [slug, setSlug] = useState<string>("");
+  const [activeTab, setActiveTab] = useState<"master" | "locations">("master");
+  const [companyName, setCompanyName] = useState("");
+  const [slug, setSlug] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
 
-  // Fleet tab
+  // Master tab
   const [trucks, setTrucks] = useState<TruckRow[]>([]);
   const [trucksLoading, setTrucksLoading] = useState(true);
   const [trucksError, setTrucksError] = useState("");
-  // Add Truck modal
-  const [showAddTruckModal, setShowAddTruckModal] = useState(false);
-  const [addTruckChassis, setAddTruckChassis] = useState("");
-  const [addTruckLoading, setAddTruckLoading] = useState(false);
-  const [addTruckError, setAddTruckError] = useState("");
 
-  // Records tab
-  const [records, setRecords] = useState<RecordRow[]>([]);
-  const [recordsLoading, setRecordsLoading] = useState(false);
-  const [recordsError, setRecordsError] = useState("");
-  const [confirmDeleteRecordId, setConfirmDeleteRecordId] = useState<string | null>(null);
-  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
+  // CSV import
+  const [importPhase, setImportPhase] = useState<"idle" | "mapping" | "importing">("idle");
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvRows, setCsvRows] = useState<string[][]>([]);
+  const [chassisColIdx, setChassisColIdx] = useState(0);
+  const [importResult, setImportResult] = useState<{ inserted: number; skipped: number; invalid: string[] } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Drivers tab
-  const [drivers, setDrivers] = useState<DriverRow[]>([]);
-  const [driversLoading, setDriversLoading] = useState(false);
-  const [driversError, setDriversError] = useState("");
-  const [showAddDriverForm, setShowAddDriverForm] = useState(false);
-  const [addDriverName, setAddDriverName] = useState("");
-  const [addDriverLoading, setAddDriverLoading] = useState(false);
-  const [addDriverError, setAddDriverError] = useState("");
-  const [pinModal, setPinModal] = useState<{ pin: string } | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [resetIdConfirmId, setResetIdConfirmId] = useState<string | null>(null);
-  const [resettingIdFor, setResettingIdFor] = useState<string | null>(null);
-  const [resetIdModal, setResetIdModal] = useState<{ name: string; pin: string } | null>(null);
-  const [resetIdError, setResetIdError] = useState<string | null>(null);
+  // Locations tab
+  const [locations, setLocations] = useState<LocationRow[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
+  const [locationsError, setLocationsError] = useState("");
+  const [editingLoc, setEditingLoc] = useState<LocationRow | null>(null);
+  const [showAddLocForm, setShowAddLocForm] = useState(false);
+  const [locForm, setLocForm] = useState({ name: "", latitude: "", longitude: "", tan_number: "" });
+  const [locFormLoading, setLocFormLoading] = useState(false);
+  const [locFormError, setLocFormError] = useState("");
+
+  // PIN management
+  const [pinValue, setPinValue] = useState("");
+  const [pinLoading, setPinLoading] = useState(false);
+  const [pinResult, setPinResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     const token = getCookie("trucktrace_token");
     if (token) {
-      const payload = decodeJwtPayload(token);
-      setCompanyName((payload?.companyName as string) ?? "");
-      setSlug((payload?.slug as string) ?? "");
+      const p = decodeJwtPayload(token);
+      setCompanyName((p?.companyName as string) ?? "");
+      setSlug((p?.slug as string) ?? "");
     }
   }, []);
 
@@ -115,121 +118,118 @@ export default function ManagerDashboardPage() {
     setTrucksError("");
     try {
       const res = await fetch("/api/manager/trucks", { headers: authHeader() });
-      const text = await res.text();
-      if (!res.ok) {
-        let detail = text;
-        try { detail = JSON.parse(text)?.error ?? text; } catch { /* html error page */ }
-        setTrucksError(`Failed to load trucks (${res.status}): ${detail}`);
-        return;
-      }
-      setTrucks(JSON.parse(text));
-    } catch (e) {
-      setTrucksError(`Failed to load trucks: ${e}`);
-    } finally {
-      setTrucksLoading(false);
-    }
+      const data = await res.json();
+      if (!res.ok) { setTrucksError(data.error ?? "Failed to load trucks"); return; }
+      setTrucks(data);
+    } catch { setTrucksError("Failed to load trucks"); }
+    finally { setTrucksLoading(false); }
   }, []);
 
-  const fetchRecords = useCallback(async () => {
-    setRecordsLoading(true);
-    setRecordsError("");
+  const fetchLocations = useCallback(async () => {
+    setLocationsLoading(true);
+    setLocationsError("");
     try {
-      const res = await fetch("/api/manager/records", { headers: authHeader() });
+      const res = await fetch("/api/manager/locations", { headers: authHeader() });
       const data = await res.json();
-      if (!res.ok) {
-        setRecordsError(data.error ?? "Failed to load records.");
-        return;
-      }
-      setRecords(data);
-    } catch (e) {
-      setRecordsError(`Failed to load records: ${e}`);
-    } finally {
-      setRecordsLoading(false);
-    }
-  }, []);
-
-  const fetchDrivers = useCallback(async () => {
-    setDriversLoading(true);
-    setDriversError("");
-    try {
-      const res = await fetch("/api/manager/drivers", { headers: authHeader() });
-      const data = await res.json();
-      if (!res.ok) {
-        setDriversError(data.error ?? "Failed to load drivers.");
-        return;
-      }
-      setDrivers(data);
-    } catch (e) {
-      setDriversError(`Failed to load drivers: ${e}`);
-    } finally {
-      setDriversLoading(false);
-    }
+      if (!res.ok) { setLocationsError(data.error ?? "Failed to load locations"); return; }
+      setLocations(data);
+    } catch { setLocationsError("Failed to load locations"); }
+    finally { setLocationsLoading(false); }
   }, []);
 
   useEffect(() => { fetchTrucks(); }, [fetchTrucks]);
-
-  useEffect(() => {
-    if (activeTab === "records") fetchRecords();
-  }, [activeTab, fetchRecords]);
-
-  useEffect(() => {
-    if (activeTab === "drivers") fetchDrivers();
-  }, [activeTab, fetchDrivers]);
+  useEffect(() => { if (activeTab === "locations") fetchLocations(); }, [activeTab, fetchLocations]);
 
   function handleLogOut() {
     document.cookie = "trucktrace_token=; path=/; max-age=0";
     router.push("/manager");
   }
 
-  async function handleAddTruck(e: FormEvent) {
-    e.preventDefault();
-    setAddTruckError("");
-    if (!/^\d{7}$/.test(addTruckChassis)) {
-      setAddTruckError("Chassis number must be exactly 7 digits.");
-      return;
-    }
-    setAddTruckLoading(true);
-    try {
-      const res = await fetch("/api/manager/trucks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ chassisNumber: addTruckChassis }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setAddTruckError(data.error ?? "Failed to add truck.");
-        return;
-      }
-      setShowAddTruckModal(false);
-      setAddTruckChassis("");
-      fetchTrucks();
-    } catch {
-      setAddTruckError("Something went wrong.");
-    } finally {
-      setAddTruckLoading(false);
-    }
+  // ── CSV import ──────────────────────────────────────────────────────────
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const { headers, rows } = parseCsvHeaders(text);
+      setCsvHeaders(headers);
+      setCsvRows(rows);
+      // Auto-detect: pick the first column whose header contains "chassis" (case-insensitive)
+      const autoIdx = headers.findIndex((h) => /chassis/i.test(h));
+      setChassisColIdx(autoIdx >= 0 ? autoIdx : 1); // default to column B (index 1)
+      setImportPhase("mapping");
+      setImportResult(null);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   }
 
-  async function handleDeleteRecord(recordId: string) {
-    setDeletingRecordId(recordId);
+  async function handleImportConfirm() {
+    const chassisNumbers = csvRows
+      .map((row) => (row[chassisColIdx] ?? "").trim())
+      .filter(Boolean);
+    if (chassisNumbers.length === 0) return;
+    setImportPhase("importing");
     try {
-      const res = await fetch(`/api/manager/trucks/${recordId}`, {
-        method: "DELETE",
-        headers: authHeader(),
+      const res = await fetch("/api/manager/trucks/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ chassisNumbers }),
       });
-      if (res.ok) {
-        setConfirmDeleteRecordId(null);
-        setRecords((prev) =>
-          prev.map((r) =>
-            r.id === recordId
-              ? { ...r, status: "deleted", deleted_at: new Date().toISOString() }
-              : r
-          )
-        );
-      }
-    } finally {
-      setDeletingRecordId(null);
+      const data = await res.json();
+      setImportResult(data);
+      setImportPhase("idle");
+      fetchTrucks();
+    } catch {
+      setImportPhase("idle");
+      setTrucksError("Import failed. Please try again.");
     }
+    setCsvHeaders([]);
+    setCsvRows([]);
+  }
+
+  // ── Locations CRUD ──────────────────────────────────────────────────────
+
+  async function handleLocFormSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLocFormError("");
+    const lat = parseFloat(locForm.latitude);
+    const lng = parseFloat(locForm.longitude);
+    if (isNaN(lat) || isNaN(lng)) { setLocFormError("Invalid coordinates"); return; }
+    setLocFormLoading(true);
+    try {
+      if (editingLoc) {
+        const res = await fetch(`/api/manager/locations/${editingLoc.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", ...authHeader() },
+          body: JSON.stringify({ name: locForm.name, latitude: lat, longitude: lng, tan_number: locForm.tan_number }),
+        });
+        if (!res.ok) { const d = await res.json(); setLocFormError(d.error ?? "Failed"); return; }
+      } else {
+        const res = await fetch("/api/manager/locations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeader() },
+          body: JSON.stringify({ name: locForm.name, latitude: lat, longitude: lng, tan_number: locForm.tan_number }),
+        });
+        if (!res.ok) { const d = await res.json(); setLocFormError(d.error ?? "Failed"); return; }
+      }
+      setEditingLoc(null);
+      setShowAddLocForm(false);
+      setLocForm({ name: "", latitude: "", longitude: "", tan_number: "" });
+      fetchLocations();
+    } catch { setLocFormError("Something went wrong."); }
+    finally { setLocFormLoading(false); }
+  }
+
+  async function handleToggleActive(loc: LocationRow) {
+    await fetch(`/api/manager/locations/${loc.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ active: !loc.active }),
+    });
+    fetchLocations();
   }
 
   async function handleMasterExport() {
@@ -245,77 +245,25 @@ export default function ManagerDashboardPage() {
     }
   }
 
-  async function handleAddDriver(e: FormEvent) {
+  async function handleSetPin(e: FormEvent) {
     e.preventDefault();
-    setAddDriverError("");
-    setAddDriverLoading(true);
+    setPinResult(null);
+    setPinLoading(true);
     try {
-      const res = await fetch("/api/manager/drivers", {
+      const res = await fetch("/api/manager/settings/pin", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ name: addDriverName }),
+        body: JSON.stringify({ pin: pinValue }),
       });
       const data = await res.json();
-      if (!res.ok) {
-        setAddDriverError(data.error ?? "Failed to add driver.");
-        return;
-      }
-      setAddDriverName("");
-      setShowAddDriverForm(false);
-      setPinModal({ pin: data.pin });
-    } catch {
-      setAddDriverError("Something went wrong.");
-    } finally {
-      setAddDriverLoading(false);
-    }
+      if (!res.ok) { setPinResult({ ok: false, msg: data.error ?? "Failed" }); return; }
+      setPinResult({ ok: true, msg: "Driver PIN updated." });
+      setPinValue("");
+    } catch { setPinResult({ ok: false, msg: "Something went wrong." }); }
+    finally { setPinLoading(false); }
   }
 
-  async function handleDeleteDriver(id: string) {
-    setDeletingId(id);
-    try {
-      const res = await fetch(`/api/manager/drivers/${id}`, {
-        method: "DELETE",
-        headers: authHeader(),
-      });
-      if (res.ok) {
-        setConfirmDeleteId(null);
-        setDrivers((prev) => prev.filter((d) => d.id !== id));
-      }
-    } finally {
-      setDeletingId(null);
-    }
-  }
-
-  async function handleResetDriverId(id: string, name: string) {
-    setResettingIdFor(id);
-    setResetIdError(null);
-    try {
-      const res = await fetch(`/api/manager/drivers/${id}/reset-pin`, {
-        method: "POST",
-        headers: authHeader(),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setResetIdError("Failed to reset Driver ID. Please try again.");
-        setResetIdConfirmId(null);
-        return;
-      }
-      setResetIdConfirmId(null);
-      setDrivers((prev) => prev.map((d) => (d.id === id ? { ...d, pin: data.pin } : d)));
-      setResetIdModal({ name, pin: data.pin });
-    } catch {
-      setResetIdError("Failed to reset Driver ID. Please try again.");
-      setResetIdConfirmId(null);
-    } finally {
-      setResettingIdFor(null);
-    }
-  }
-
-  const tabLabel: Record<"fleet" | "records" | "drivers", string> = {
-    fleet: "Fleet",
-    records: "Records",
-    drivers: "Drivers",
-  };
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <main className="min-h-screen bg-gray-50">
@@ -323,9 +271,7 @@ export default function ManagerDashboardPage() {
       <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between gap-4">
         <div className="min-w-0">
           <h1 className="text-xl font-bold text-gray-900 tracking-tight">TruckTrace</h1>
-          <p className="text-xs text-gray-400">
-            {companyName ? companyName : "Fleet Manager Dashboard"}
-          </p>
+          <p className="text-xs text-gray-400">{companyName || "Fleet Manager Dashboard"}</p>
           {slug && (
             <div className="mt-1 flex items-center gap-2">
               <span className="text-xs text-gray-500 truncate">
@@ -338,10 +284,7 @@ export default function ManagerDashboardPage() {
                 onClick={() => {
                   navigator.clipboard
                     .writeText(`https://truck-trace.vercel.app/driver?dealer=${slug}`)
-                    .then(() => {
-                      setLinkCopied(true);
-                      setTimeout(() => setLinkCopied(false), 2000);
-                    })
+                    .then(() => { setLinkCopied(true); setTimeout(() => setLinkCopied(false), 2000); })
                     .catch(() => {});
                 }}
                 className="shrink-0 text-xs text-gray-400 hover:text-gray-700 border border-gray-200 rounded px-1.5 py-0.5 transition-colors"
@@ -359,35 +302,29 @@ export default function ManagerDashboardPage() {
         </button>
       </header>
 
-      {/* Tab switcher */}
+      {/* Tab bar */}
       <div className="bg-white border-b border-gray-200 px-6">
         <nav className="flex -mb-px">
-          {(["fleet", "records", "drivers"] as const).map((tab) => (
+          {(["master", "locations"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              className={`px-4 py-3 text-sm font-medium border-b-2 capitalize transition-colors ${
                 activeTab === tab
                   ? "border-blue-600 text-blue-600"
                   : "border-transparent text-gray-500 hover:text-gray-700"
               }`}
             >
-              {tabLabel[tab]}
+              {tab === "master" ? "Master" : "Locations"}
             </button>
           ))}
         </nav>
       </div>
 
-      {/* ── Fleet tab ─────────────────────────────────────────────────────────── */}
-      {activeTab === "fleet" && (
-        <>
-          <div className="px-6 py-4 flex items-center gap-3">
-            <button
-              onClick={() => { setShowAddTruckModal(true); setAddTruckError(""); setAddTruckChassis(""); }}
-              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-            >
-              Add Truck
-            </button>
+      {/* ── Master tab ───────────────────────────────────────────────────── */}
+      {activeTab === "master" && (
+        <div className="px-6 py-4 pb-10">
+          <div className="mb-4 flex flex-wrap items-center gap-3">
             <button
               onClick={fetchTrucks}
               disabled={trucksLoading}
@@ -395,494 +332,339 @@ export default function ManagerDashboardPage() {
             >
               {trucksLoading ? "Refreshing…" : "Refresh"}
             </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="text-sm border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg transition-colors"
+            >
+              Import CSV
+            </button>
+            <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleFileChange} />
+            <button
+              onClick={handleMasterExport}
+              className="text-sm border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg transition-colors"
+            >
+              Export CSV
+            </button>
           </div>
 
-          <div className="px-6 pb-10">
-            {trucksError && (
-              <p className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2">
-                {trucksError}
+          {/* CSV column-mapping UI */}
+          {importPhase === "mapping" && csvHeaders.length > 0 && (
+            <div className="mb-4 bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
+              <p className="text-sm font-medium text-blue-900">
+                Which column contains chassis numbers?
               </p>
+              <div className="flex flex-wrap gap-2">
+                {csvHeaders.map((h, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setChassisColIdx(i)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                      chassisColIdx === i
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    {h || `Column ${i + 1}`}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-blue-700">
+                Preview: {csvRows.slice(0, 3).map((r) => r[chassisColIdx] ?? "—").join(", ")}
+                {csvRows.length > 3 ? ` … (${csvRows.length} total)` : ""}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setImportPhase("idle"); setCsvHeaders([]); setCsvRows([]); }}
+                  className="text-sm border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleImportConfirm}
+                  className="text-sm bg-blue-600 hover:bg-blue-700 text-white font-medium px-3 py-1.5 rounded-lg"
+                >
+                  Import {csvRows.length} rows
+                </button>
+              </div>
+            </div>
+          )}
+
+          {importPhase === "importing" && (
+            <p className="mb-4 text-sm text-gray-500">Importing…</p>
+          )}
+
+          {importResult && (
+            <div className="mb-4 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 space-y-1">
+              <p>Inserted: {importResult.inserted} &nbsp;·&nbsp; Already existed: {importResult.skipped}</p>
+              {importResult.invalid.length > 0 && (
+                <p className="text-amber-700">
+                  Skipped (not 7-digit): {importResult.invalid.join(", ")}
+                </p>
+              )}
+              <button
+                onClick={() => setImportResult(null)}
+                className="text-xs text-green-600 underline"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {trucksError && (
+            <p className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2">
+              {trucksError}
+            </p>
+          )}
+
+          <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200 text-left">
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Chassis</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Location</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">TAN</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Last Logged</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Method</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trucksLoading && (
+                  <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">Loading…</td></tr>
+                )}
+                {!trucksLoading && trucks.length === 0 && (
+                  <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">No trucks found. Import a CSV to get started.</td></tr>
+                )}
+                {!trucksLoading && trucks.map((truck) => (
+                  <tr key={truck.truck_id} className="border-t border-gray-100 hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 font-mono font-medium text-gray-900">{truck.chassis_number}</td>
+                    <td className="px-4 py-3 text-gray-700">{truck.location_name ?? "—"}</td>
+                    <td className="px-4 py-3 text-gray-700 font-mono">{truck.tan_number ?? "—"}</td>
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(truck.location_logged_at)}</td>
+                    <td className="px-4 py-3">
+                      {truck.location_method ? (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          truck.location_method === "auto"
+                            ? "bg-blue-100 text-blue-700"
+                            : "bg-gray-100 text-gray-600"
+                        }`}>
+                          {truck.location_method}
+                        </span>
+                      ) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Locations tab ────────────────────────────────────────────────── */}
+      {activeTab === "locations" && (
+        <div className="px-6 py-4 pb-10 space-y-6">
+          {/* Locations list */}
+          <div>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-base font-semibold text-gray-900">Locations</h2>
+              <button
+                onClick={() => {
+                  setEditingLoc(null);
+                  setLocForm({ name: "", latitude: "", longitude: "", tan_number: "" });
+                  setLocFormError("");
+                  setShowAddLocForm(true);
+                }}
+                className="text-sm bg-blue-600 hover:bg-blue-700 text-white font-medium px-3 py-1.5 rounded-lg transition-colors"
+              >
+                Add Location
+              </button>
+            </div>
+
+            {locationsError && (
+              <p className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2">
+                {locationsError}
+              </p>
+            )}
+
+            {/* Add / Edit form */}
+            {(showAddLocForm || editingLoc) && (
+              <form
+                onSubmit={handleLocFormSubmit}
+                className="mb-4 bg-white border border-gray-200 rounded-xl p-5 space-y-3"
+              >
+                <h3 className="text-sm font-semibold text-gray-900">
+                  {editingLoc ? `Edit: ${editingLoc.name}` : "Add New Location"}
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="col-span-2">
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={locForm.name}
+                      onChange={(e) => setLocForm((f) => ({ ...f, name: e.target.value }))}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="e.g. Yard A"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Latitude</label>
+                    <input
+                      type="text"
+                      required
+                      value={locForm.latitude}
+                      onChange={(e) => setLocForm((f) => ({ ...f, latitude: e.target.value }))}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="-33.8688"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Longitude</label>
+                    <input
+                      type="text"
+                      required
+                      value={locForm.longitude}
+                      onChange={(e) => setLocForm((f) => ({ ...f, longitude: e.target.value }))}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="151.2093"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-xs font-medium text-gray-600 mb-1">TAN Number</label>
+                    <input
+                      type="text"
+                      required
+                      value={locForm.tan_number}
+                      onChange={(e) => setLocForm((f) => ({ ...f, tan_number: e.target.value }))}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="TAN-001"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400">
+                  Get coordinates by right-clicking a point in Google Maps and selecting the coordinate.
+                </p>
+                {locFormError && (
+                  <p className="text-xs text-red-600">{locFormError}</p>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setShowAddLocForm(false); setEditingLoc(null); setLocFormError(""); }}
+                    className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 rounded-lg hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={locFormLoading}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white text-sm font-semibold py-2 rounded-lg"
+                  >
+                    {locFormLoading ? "Saving…" : (editingLoc ? "Save Changes" : "Add Location")}
+                  </button>
+                </div>
+              </form>
             )}
 
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-200 text-left">
-                    <th className="px-4 py-3 font-semibold text-gray-600">Chassis Number</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Last Driver</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Last Known Location</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Last Updated</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600">Name</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600">TAN</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600">Coordinates</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600">Status</th>
                     <th className="px-4 py-3 font-semibold text-gray-600"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {trucksLoading && (
-                    <tr>
-                      <td colSpan={5} className="px-4 py-10 text-center text-gray-400">
-                        Loading…
-                      </td>
-                    </tr>
+                  {locationsLoading && (
+                    <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">Loading…</td></tr>
                   )}
-                  {!trucksLoading && trucks.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="px-4 py-10 text-center text-gray-400">
-                        No active trucks found.
-                      </td>
-                    </tr>
+                  {!locationsLoading && locations.length === 0 && (
+                    <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">No locations yet. Add one to get started.</td></tr>
                   )}
-                  {!trucksLoading &&
-                    trucks.map((truck) => (
-                      <tr
-                        key={truck.truck_id}
-                        className="border-t border-gray-100 hover:bg-gray-50 transition-colors"
-                      >
-                        <td className="px-4 py-3 text-gray-900 font-mono font-medium">
-                          {truck.chassis_number}
-                        </td>
-                        <td className="px-4 py-3 text-gray-700">{truck.driver_name}</td>
-                        <td className="px-4 py-3 text-gray-600 max-w-xs truncate">
-                          {truck.last_known_address ?? "—"}
-                        </td>
-                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                          {formatDate(truck.last_updated)}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <Link
-                            href={`/manager/trucks/${truck.truck_id}/timeline`}
-                            className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
+                  {!locationsLoading && locations.map((loc) => (
+                    <tr
+                      key={loc.id}
+                      className={`border-t border-gray-100 hover:bg-gray-50 transition-colors ${!loc.active ? "opacity-50" : ""}`}
+                    >
+                      <td className="px-4 py-3 font-medium text-gray-900">{loc.name}</td>
+                      <td className="px-4 py-3 font-mono text-gray-700">{loc.tan_number}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-500">
+                        {loc.latitude.toFixed(5)}, {loc.longitude.toFixed(5)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          loc.active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                        }`}>
+                          {loc.active ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-3">
+                          <button
+                            onClick={() => {
+                              setEditingLoc(loc);
+                              setShowAddLocForm(false);
+                              setLocForm({
+                                name: loc.name,
+                                latitude: String(loc.latitude),
+                                longitude: String(loc.longitude),
+                                tan_number: loc.tan_number,
+                              });
+                              setLocFormError("");
+                            }}
+                            className="text-xs text-blue-600 hover:text-blue-800 font-medium"
                           >
-                            Timeline
-                          </Link>
-                        </td>
-                      </tr>
-                    ))}
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleToggleActive(loc)}
+                            className="text-xs text-gray-500 hover:text-gray-700 font-medium"
+                          >
+                            {loc.active ? "Deactivate" : "Activate"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
-        </>
-      )}
 
-      {/* ── Records tab ───────────────────────────────────────────────────────── */}
-      {activeTab === "records" && (
-        <div className="px-6 py-6 pb-10">
-          <div className="mb-4 flex items-center gap-3">
-            <button
-              onClick={fetchRecords}
-              disabled={recordsLoading}
-              className="text-sm border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
-            >
-              {recordsLoading ? "Refreshing…" : "Refresh"}
-            </button>
-            <button
-              onClick={handleMasterExport}
-              className="text-sm border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg transition-colors"
-            >
-              Export All Records
-            </button>
-          </div>
-
-          {recordsError && (
-            <p className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2">
-              {recordsError}
+          {/* PIN management */}
+          <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <h2 className="text-base font-semibold text-gray-900 mb-1">Driver PIN</h2>
+            <p className="text-xs text-gray-500 mb-4">
+              Set the 4-digit PIN drivers use to access the check-in page. After 5 wrong attempts the PIN locks for 5 minutes.
             </p>
-          )}
-
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200 text-left">
-                  <th className="px-4 py-3 font-semibold text-gray-600">Chassis Number</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600">Status</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600">Last Driver</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600">Last Known Location</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600">Last Updated</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {recordsLoading && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-gray-400">
-                      Loading…
-                    </td>
-                  </tr>
-                )}
-                {!recordsLoading && records.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-gray-400">
-                      No trucks found.
-                    </td>
-                  </tr>
-                )}
-                {!recordsLoading &&
-                  records.map((record) => (
-                    <tr
-                      key={record.id}
-                      className={`border-t border-gray-100 hover:bg-gray-50 transition-colors ${
-                        record.status === "deleted" ? "opacity-60" : ""
-                      }`}
-                    >
-                      <td className="px-4 py-3 text-gray-900 font-mono font-medium">
-                        {record.chassis_number}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${
-                            recordStatusBadge[record.status] ?? "bg-gray-100 text-gray-600"
-                          }`}
-                        >
-                          {record.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-700">{record.last_driver ?? "—"}</td>
-                      <td className="px-4 py-3 text-gray-600 max-w-xs truncate">
-                        {record.last_known_location ?? "—"}
-                      </td>
-                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                        {formatDate(record.last_updated)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {record.status !== "deleted" && (
-                          <div className="inline-flex items-center gap-4">
-                            <Link
-                              href={`/manager/trucks/${record.id}/timeline`}
-                              className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
-                            >
-                              Timeline
-                            </Link>
-                            {confirmDeleteRecordId === record.id ? (
-                              <span className="inline-flex items-center gap-2">
-                                <span className="text-xs text-gray-600">Are you sure?</span>
-                                <button
-                                  onClick={() => handleDeleteRecord(record.id)}
-                                  disabled={deletingRecordId === record.id}
-                                  className="text-xs text-red-600 hover:text-red-800 font-medium disabled:opacity-50 transition-colors"
-                                >
-                                  {deletingRecordId === record.id ? "Deleting…" : "Confirm"}
-                                </button>
-                                <button
-                                  onClick={() => setConfirmDeleteRecordId(null)}
-                                  disabled={deletingRecordId === record.id}
-                                  className="text-xs text-gray-500 hover:text-gray-700 font-medium transition-colors"
-                                >
-                                  Cancel
-                                </button>
-                              </span>
-                            ) : (
-                              <button
-                                onClick={() => setConfirmDeleteRecordId(record.id)}
-                                className="text-xs text-red-500 hover:text-red-700 font-medium transition-colors"
-                              >
-                                Delete
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── Drivers tab ───────────────────────────────────────────────────────── */}
-      {activeTab === "drivers" && (
-        <div className="px-6 py-6 pb-10">
-          <div className="mb-6">
-            {!showAddDriverForm ? (
-              <button
-                onClick={() => setShowAddDriverForm(true)}
-                className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-              >
-                Add Driver
-              </button>
-            ) : (
-              <form
-                onSubmit={handleAddDriver}
-                className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-end gap-3 max-w-md"
-              >
-                <div className="flex-1 w-full">
-                  <label
-                    htmlFor="addDriverName"
-                    className="block text-sm font-medium text-gray-700 mb-1"
-                  >
-                    Driver Name
-                  </label>
-                  <input
-                    id="addDriverName"
-                    type="text"
-                    required
-                    autoFocus
-                    value={addDriverName}
-                    onChange={(e) => setAddDriverName(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="e.g. John Smith"
-                  />
-                  {addDriverError && (
-                    <p className="mt-1 text-xs text-red-600">{addDriverError}</p>
-                  )}
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAddDriverForm(false);
-                      setAddDriverName("");
-                      setAddDriverError("");
-                    }}
-                    className="text-sm border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium px-3 py-2 rounded-lg transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={addDriverLoading}
-                    className="text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium px-3 py-2 rounded-lg transition-colors"
-                  >
-                    {addDriverLoading ? "Adding…" : "Add Driver"}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-
-          {driversError && (
-            <p className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2">
-              {driversError}
-            </p>
-          )}
-
-          {resetIdError && (
-            <p className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2">
-              {resetIdError}
-            </p>
-          )}
-
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200 text-left">
-                  <th className="px-4 py-3 font-semibold text-gray-600">Name</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600">Driver ID</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600">Date Added</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {driversLoading && (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-gray-400">
-                      Loading…
-                    </td>
-                  </tr>
-                )}
-                {!driversLoading && drivers.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-gray-400">
-                      No drivers yet.
-                    </td>
-                  </tr>
-                )}
-                {!driversLoading &&
-                  drivers.map((driver) => (
-                    <tr
-                      key={driver.id}
-                      className="border-t border-gray-100 hover:bg-gray-50 transition-colors"
-                    >
-                      <td className="px-4 py-3 text-gray-900 font-medium">{driver.name}</td>
-                      <td className="px-4 py-3 text-gray-700 font-mono tracking-wider">
-                        {driver.pin}
-                      </td>
-                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                        {formatDate(driver.created_at)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {resetIdConfirmId === driver.id ? (
-                          <span className="inline-flex items-center gap-2">
-                            <span className="text-xs text-gray-600">
-                              Reset this driver&apos;s ID?
-                            </span>
-                            <button
-                              onClick={() => handleResetDriverId(driver.id, driver.name)}
-                              disabled={resettingIdFor === driver.id}
-                              className="text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50 transition-colors"
-                            >
-                              {resettingIdFor === driver.id ? "Resetting…" : "Confirm"}
-                            </button>
-                            <button
-                              onClick={() => setResetIdConfirmId(null)}
-                              disabled={resettingIdFor === driver.id}
-                              className="text-xs text-gray-500 hover:text-gray-700 font-medium transition-colors"
-                            >
-                              Cancel
-                            </button>
-                          </span>
-                        ) : confirmDeleteId === driver.id ? (
-                          <span className="inline-flex items-center gap-2">
-                            <span className="text-xs text-gray-600">Are you sure?</span>
-                            <button
-                              onClick={() => handleDeleteDriver(driver.id)}
-                              disabled={deletingId === driver.id}
-                              className="text-xs text-red-600 hover:text-red-800 font-medium disabled:opacity-50 transition-colors"
-                            >
-                              {deletingId === driver.id ? "Deleting…" : "Confirm"}
-                            </button>
-                            <button
-                              onClick={() => setConfirmDeleteId(null)}
-                              disabled={deletingId === driver.id}
-                              className="text-xs text-gray-500 hover:text-gray-700 font-medium transition-colors"
-                            >
-                              Cancel
-                            </button>
-                          </span>
-                        ) : (
-                          <div className="flex items-center justify-end gap-4">
-                            <button
-                              onClick={() => {
-                                setResetIdConfirmId(driver.id);
-                                setConfirmDeleteId(null);
-                                setResetIdError(null);
-                              }}
-                              className="text-xs text-blue-500 hover:text-blue-700 font-medium transition-colors"
-                            >
-                              Reset ID
-                            </button>
-                            <button
-                              onClick={() => {
-                                setConfirmDeleteId(driver.id);
-                                setResetIdConfirmId(null);
-                              }}
-                              className="text-xs text-red-500 hover:text-red-700 font-medium transition-colors"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── Add Truck modal ───────────────────────────────────────────────────── */}
-      {showAddTruckModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center px-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Add Truck</h2>
-
-            <div className="mb-5 flex gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
-              <span className="shrink-0 font-bold">⚠</span>
-              <p>
-                Trucks are normally synced automatically from the stock list via Power Automate.
-                Only add a truck manually if it is not in the stock system.
-              </p>
-            </div>
-
-            <form onSubmit={handleAddTruck} className="space-y-4">
+            <form onSubmit={handleSetPin} className="flex items-end gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Chassis Number (7 digits)
-                </label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">New PIN</label>
                 <input
-                  type="text"
-                  required
-                  autoFocus
-                  value={addTruckChassis}
-                  onChange={(e) => setAddTruckChassis(e.target.value)}
-                  pattern="\d{7}"
-                  maxLength={7}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="1234567"
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  value={pinValue}
+                  onChange={(e) => { setPinValue(e.target.value.replace(/\D/g, "")); setPinResult(null); }}
+                  className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-xl text-center tracking-[0.3em] font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="••••"
                 />
-                {addTruckError && (
-                  <p className="mt-1 text-xs text-red-600">{addTruckError}</p>
-                )}
               </div>
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddTruckModal(false);
-                    setAddTruckChassis("");
-                    setAddTruckError("");
-                  }}
-                  className="flex-1 border border-gray-300 text-gray-700 hover:bg-gray-50 font-medium py-2.5 rounded-xl transition-colors text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={addTruckLoading}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
-                >
-                  {addTruckLoading ? "Adding…" : "Add Truck"}
-                </button>
-              </div>
+              <button
+                type="submit"
+                disabled={pinValue.length !== 4 || pinLoading}
+                className="text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold px-4 py-2 rounded-lg transition-colors"
+              >
+                {pinLoading ? "Saving…" : "Set PIN"}
+              </button>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── New driver PIN modal ───────────────────────────────────────────────── */}
-      {pinModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center px-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm text-center">
-            <h2 className="text-lg font-bold text-gray-900 mb-6">Driver Added</h2>
-            <div className="bg-blue-50 border-2 border-blue-200 rounded-xl py-6 px-4 mb-6">
-              <p className="text-xs font-semibold text-blue-500 uppercase tracking-widest mb-3">
-                Driver ID
+            {pinResult && (
+              <p className={`mt-2 text-sm ${pinResult.ok ? "text-green-700" : "text-red-600"}`}>
+                {pinResult.msg}
               </p>
-              <p className="text-6xl font-bold tracking-[0.3em] text-blue-700">
-                {pinModal.pin}
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setPinModal(null);
-                fetchDrivers();
-              }}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-colors"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Reset Driver ID result modal ───────────────────────────────────────── */}
-      {resetIdModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center px-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm text-center">
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Driver ID Reset</h2>
-            <p className="text-sm text-gray-500 mb-6">
-              The new Driver ID for{" "}
-              <span className="font-medium text-gray-900">{resetIdModal.name}</span> is:
-            </p>
-            <div className="bg-blue-50 border-2 border-blue-200 rounded-xl py-6 px-4 mb-4">
-              <p className="text-4xl font-mono tracking-widest text-blue-700">
-                {resetIdModal.pin}
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(resetIdModal.pin).catch(() => {});
-              }}
-              className="w-full mb-3 border border-gray-300 text-gray-700 hover:bg-gray-50 font-medium py-2.5 rounded-xl transition-colors text-sm"
-            >
-              Copy to Clipboard
-            </button>
-            <button
-              onClick={() => setResetIdModal(null)}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-colors"
-            >
-              Done
-            </button>
+            )}
           </div>
         </div>
       )}

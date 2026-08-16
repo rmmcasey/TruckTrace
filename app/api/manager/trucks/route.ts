@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireManager } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const manager = await requireManager(req);
   if (!manager) {
@@ -9,51 +11,34 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
   const { managerId } = manager;
 
-  const { searchParams } = new URL(req.url);
-
-  if (searchParams.get("all") === "true") {
-    const { data: allTrucksData, error: trucksErr } = await supabase
-      .from("trucks")
-      .select("id, chassis_number")
-      .eq("manager_id", managerId)
-      .order("chassis_number");
-
-    if (trucksErr) return NextResponse.json({ error: trucksErr.message }, { status: 500 });
-
-    const { data: viewData } = await supabase
-      .from("active_trucks_latest_position")
-      .select("truck_id, driver_name, last_known_address, last_updated")
-      .eq("manager_id", managerId);
-
-    const posMap = new Map(
-      (viewData ?? []).map((r: Record<string, unknown>) => [r.truck_id as string, r])
-    );
-
-    const result = (allTrucksData ?? []).map((truck) => {
-      const pos = posMap.get(truck.id) as Record<string, unknown> | undefined;
-      return {
-        truck_id: truck.id,
-        chassis_number: truck.chassis_number,
-        driver_name: (pos?.driver_name as string) ?? "—",
-        last_known_address: (pos?.last_known_address as string | null) ?? null,
-        last_updated: (pos?.last_updated as string | null) ?? null,
-      };
-    });
-
-    return NextResponse.json(result);
-  }
-
   const { data, error } = await supabase
-    .from("active_trucks_latest_position")
-    .select("*")
+    .from("trucks")
+    .select("id, chassis_number, status, deleted_at, current_location_id, location_logged_at, location_method, locations(name, tan_number)")
     .eq("manager_id", managerId)
-    .eq("status", "active");
+    .is("deleted_at", null)
+    .order("chassis_number");
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(data);
+  const result = (data ?? []).map((truck) => {
+    const loc = (Array.isArray(truck.locations) ? truck.locations[0] : truck.locations) as
+      | { name: string; tan_number: string }
+      | null;
+    return {
+      truck_id: truck.id,
+      chassis_number: truck.chassis_number,
+      status: truck.status,
+      current_location_id: truck.current_location_id ?? null,
+      location_name: loc?.name ?? null,
+      tan_number: loc?.tan_number ?? null,
+      location_logged_at: truck.location_logged_at ?? null,
+      location_method: truck.location_method ?? null,
+    };
+  });
+
+  return NextResponse.json(result);
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
