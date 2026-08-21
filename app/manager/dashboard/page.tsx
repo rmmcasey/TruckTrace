@@ -177,9 +177,13 @@ export default function ManagerDashboardPage() {
         body: JSON.stringify({ chassisNumbers }),
       });
       const data = await res.json();
-      setImportResult(data);
       setImportPhase("idle");
-      fetchTrucks();
+      if (res.ok) {
+        setImportResult(data);
+        fetchTrucks();
+      } else {
+        setTrucksError(data.error ?? "Import failed.");
+      }
     } catch {
       setImportPhase("idle");
       setTrucksError("Import failed. Please try again.");
@@ -391,7 +395,7 @@ export default function ManagerDashboardPage() {
           {importResult && (
             <div className="mb-4 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 space-y-1">
               <p>Inserted: {importResult.inserted} &nbsp;·&nbsp; Already existed: {importResult.skipped}</p>
-              {importResult.invalid.length > 0 && (
+              {(importResult.invalid?.length ?? 0) > 0 && (
                 <p className="text-amber-700">
                   Skipped (not 7-digit): {importResult.invalid.join(", ")}
                 </p>
