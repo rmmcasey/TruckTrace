@@ -54,8 +54,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   });
 
   if (logError) {
-    console.error("[location] insert failed:", logError.message);
-    return NextResponse.json({ error: "Failed to log location" }, { status: 500 });
+    return NextResponse.json({ error: logError.message }, { status: 500 });
   }
 
   await supabase
