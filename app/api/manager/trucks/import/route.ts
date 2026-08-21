@@ -24,7 +24,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  if (valid.length === 0) {
+  const uniqueValid = [...new Set(valid)];
+
+  if (uniqueValid.length === 0) {
     return NextResponse.json({ inserted: 0, skipped: 0, invalid }, { status: 200 });
   }
 
@@ -33,11 +35,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     .from("trucks")
     .select("chassis_number")
     .eq("manager_id", manager.managerId)
-    .in("chassis_number", valid);
+    .in("chassis_number", uniqueValid);
 
   const existingSet = new Set((existing ?? []).map((t) => t.chassis_number));
-  const toInsert = valid.filter((c) => !existingSet.has(c));
-  const skipped = valid.length - toInsert.length;
+  const toInsert = uniqueValid.filter((c) => !existingSet.has(c));
+  const skipped = uniqueValid.length - toInsert.length + (valid.length - uniqueValid.length);
 
   if (toInsert.length === 0) {
     return NextResponse.json({ inserted: 0, skipped, invalid });
