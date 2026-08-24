@@ -15,16 +15,18 @@ const SYNC_MANAGER_ID = process.env.SYNC_MANAGER_ID ?? "";
 let lastCallMs = 0;
 const RATE_LIMIT_MS = 60_000;
 
-function verifySecret(provided: string | null): boolean {
-  const expected = process.env.SYNC_SHARED_SECRET ?? "";
-  if (!provided || !expected) return false;
+function verifySecret(provided: string | null): { ok: boolean; debug: string } {
+  const expected = process.env.SYNC_SECRET ?? "";
+  // Debug info — lengths only, never actual values.
+  const debug = `env_defined=${!!expected} env_len=${expected.length} header_present=${provided !== null} header_len=${provided?.length ?? 0}`;
+  if (!provided || !expected) return { ok: false, debug };
   // Pad to equal length so timingSafeEqual never throws on length mismatch.
   const len = Math.max(provided.length, expected.length, 1);
   const a = Buffer.alloc(len);
   const b = Buffer.alloc(len);
   Buffer.from(provided).copy(a);
   Buffer.from(expected).copy(b);
-  return timingSafeEqual(a, b);
+  return { ok: timingSafeEqual(a, b), debug };
 }
 
 function parseCsv(raw: string): string[][] {
@@ -70,8 +72,11 @@ async function writeSyncLog(entry: {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  if (!verifySecret(req.headers.get("X-Sync-Secret"))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Next.js lowercases all incoming headers; both casings work with .get()
+  const { ok, debug } = verifySecret(req.headers.get("x-sync-secret"));
+  console.log("[sync] auth check:", debug);
+  if (!ok) {
+    return NextResponse.json({ error: "Unauthorized", debug }, { status: 401 });
   }
 
   if (!SYNC_MANAGER_ID) {
