@@ -13,6 +13,16 @@ interface TruckRow {
   location_method: "auto" | "manual" | null;
 }
 
+interface SyncLogRow {
+  id: string;
+  created_at: string;
+  rows_processed: number;
+  created_count: number;
+  skipped_count: number;
+  success: boolean;
+  error_message: string | null;
+}
+
 interface LocationRow {
   id: string;
   name: string;
@@ -69,7 +79,7 @@ function parseCsvHeaders(raw: string): { headers: string[]; rows: string[][] } {
 
 export default function ManagerDashboardPage() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<"master" | "locations">("master");
+  const [activeTab, setActiveTab] = useState<"master" | "locations" | "sync">("master");
   const [companyName, setCompanyName] = useState("");
   const [slug, setSlug] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
@@ -101,6 +111,10 @@ export default function ManagerDashboardPage() {
   const [pinValue, setPinValue] = useState("");
   const [pinLoading, setPinLoading] = useState(false);
   const [pinResult, setPinResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // Sync logs tab
+  const [syncLogs, setSyncLogs] = useState<SyncLogRow[]>([]);
+  const [syncLogsLoading, setSyncLogsLoading] = useState(false);
 
   useEffect(() => {
     const token = getCookie("trucktrace_token");
@@ -135,8 +149,19 @@ export default function ManagerDashboardPage() {
     finally { setLocationsLoading(false); }
   }, []);
 
+  const fetchSyncLogs = useCallback(async () => {
+    setSyncLogsLoading(true);
+    try {
+      const res = await fetch("/api/manager/sync-logs", { headers: authHeader() });
+      if (res.ok) setSyncLogs(await res.json());
+    } finally {
+      setSyncLogsLoading(false);
+    }
+  }, []);
+
   useEffect(() => { fetchTrucks(); }, [fetchTrucks]);
   useEffect(() => { if (activeTab === "locations") fetchLocations(); }, [activeTab, fetchLocations]);
+  useEffect(() => { if (activeTab === "sync") fetchSyncLogs(); }, [activeTab, fetchSyncLogs]);
 
   function handleLogOut() {
     document.cookie = "trucktrace_token=; path=/; max-age=0";
@@ -304,7 +329,7 @@ export default function ManagerDashboardPage() {
       {/* Tab bar */}
       <div className="bg-white border-b border-gray-200 px-6">
         <nav className="flex -mb-px">
-          {(["master", "locations"] as const).map((tab) => (
+          {(["master", "locations", "sync"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -314,7 +339,7 @@ export default function ManagerDashboardPage() {
                   : "border-transparent text-gray-500 hover:text-gray-700"
               }`}
             >
-              {tab === "master" ? "Master" : "Locations"}
+              {tab === "master" ? "Master" : tab === "locations" ? "Locations" : "Sync"}
             </button>
           ))}
         </nav>
@@ -449,6 +474,70 @@ export default function ManagerDashboardPage() {
                           {truck.location_method}
                         </span>
                       ) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Sync tab ─────────────────────────────────────────────────────── */}
+      {activeTab === "sync" && (
+        <div className="px-6 py-4 pb-10 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">Automated Sync History</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Last 50 runs from the scheduled chassis-import job.
+              </p>
+            </div>
+            <button
+              onClick={fetchSyncLogs}
+              disabled={syncLogsLoading}
+              className="text-sm border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+            >
+              {syncLogsLoading ? "Loading…" : "Refresh"}
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200 text-left">
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Time</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Status</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Rows</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Added</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Skipped</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600">Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {syncLogsLoading && (
+                  <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Loading…</td></tr>
+                )}
+                {!syncLogsLoading && syncLogs.length === 0 && (
+                  <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">No sync runs recorded yet.</td></tr>
+                )}
+                {!syncLogsLoading && syncLogs.map((log) => (
+                  <tr key={log.id} className="border-t border-gray-100 hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs">
+                      {formatDate(log.created_at)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                        log.success ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"
+                      }`}>
+                        {log.success ? "OK" : "Failed"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">{log.rows_processed}</td>
+                    <td className="px-4 py-3 text-gray-700">{log.created_count}</td>
+                    <td className="px-4 py-3 text-gray-700">{log.skipped_count}</td>
+                    <td className="px-4 py-3 text-xs text-red-600 max-w-xs truncate">
+                      {log.error_message ?? "—"}
                     </td>
                   </tr>
                 ))}
