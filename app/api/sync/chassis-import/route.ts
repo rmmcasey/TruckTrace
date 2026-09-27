@@ -76,7 +76,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const { ok, debug } = verifySecret(req.headers.get("x-sync-secret"));
   console.log("[sync] auth check:", debug);
   if (!ok) {
-    return NextResponse.json({ error: "Unauthorized", debug }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   if (!SYNC_MANAGER_ID) {
@@ -116,9 +116,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const colIdx = detectChassisColumn(rows[0]);
   const chassisNumbers = rows.slice(1).map((r) => (r[colIdx] ?? "").trim()).filter(Boolean);
 
-  let result: { inserted: number; skipped: number; invalid: string[] };
+  let result: Awaited<ReturnType<typeof upsertChassisList>>;
   try {
-    result = await upsertChassisList(chassisNumbers, SYNC_MANAGER_ID);
+    result = await upsertChassisList(chassisNumbers, SYNC_MANAGER_ID, { fullSync: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     await writeSyncLog({ rowsProcessed: chassisNumbers.length, created: 0, skipped: 0, success: false, errorMessage: msg });
@@ -130,12 +130,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     created: result.inserted,
     skipped: result.skipped,
     success: true,
+    errorMessage:
+      result.removed || result.restored
+        ? `Removed ${result.removed}, restored ${result.restored}`
+        : undefined,
   });
 
   return NextResponse.json({
     rowsProcessed: chassisNumbers.length,
     created: result.inserted,
     skipped: result.skipped,
+    restored: result.restored,
+    removed: result.removed,
     errors: result.invalid,
   });
 }
