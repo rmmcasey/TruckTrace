@@ -11,16 +11,28 @@ export interface ImportResult {
 export interface ImportOptions {
   /**
    * The list is the complete, authoritative set of trucks (the SharePoint sync).
-   * Trucks missing from it are soft-deleted; soft-deleted trucks that reappear
-   * are restored with their history intact. Leave false for manual imports,
+   * Trucks missing from it get status "removed" (still shown, greyed out, at the
+   * bottom of Master; hidden from drivers). Removed trucks that reappear go back
+   * to "active" with their history intact. Trucks deleted by hand (deleted_at)
+   * are never touched. Leave false for manual imports,
    * which may only contain a few new chassis numbers.
    */
   fullSync?: boolean;
 }
 
-// Refuse to soft-delete more than this share of active trucks in one sync.
+// Refuse to mark as removed more than this share of active trucks in one sync.
 // Protects against a truncated/wrong file hiding the whole fleet.
 const MAX_REMOVAL_RATIO = 0.5;
+
+// Status for trucks no longer in the sync file.
+export const REMOVED = "removed";
+
+interface Truck {
+  id: string;
+  chassis_number: string;
+  status: string;
+  deleted_at: string | null;
+}
 
 export async function upsertChassisList(
   chassisNumbers: string[],
@@ -51,24 +63,21 @@ export async function upsertChassisList(
   // All of this manager's trucks, including soft-deleted ones.
   const { data: allTrucks, error: fetchError } = await supabase
     .from("trucks")
-    .select("id, chassis_number, deleted_at")
+    .select("id, chassis_number, status, deleted_at")
     .eq("manager_id", managerId);
 
   if (fetchError) throw new Error(fetchError.message);
 
   const byChassis = new Map(
-    (allTrucks ?? []).map((t: { id: string; chassis_number: string; deleted_at: string | null }) => [
-      t.chassis_number,
-      t,
-    ])
+    (allTrucks ?? []).map((t: Truck) => [t.chassis_number, t])
   );
   const inFile = new Set(uniqueValid);
 
   const toInsert = uniqueValid.filter((c) => !byChassis.has(c));
   const toRestore = uniqueValid
     .map((c) => byChassis.get(c))
-    .filter((t): t is { id: string; chassis_number: string; deleted_at: string | null } => !!t && !!t.deleted_at);
-  const active = (allTrucks ?? []).filter((t) => !t.deleted_at);
+    .filter((t): t is Truck => !!t && !t.deleted_at && t.status === REMOVED);
+  const active = (allTrucks ?? []).filter((t: Truck) => !t.deleted_at && t.status === "active");
   const toRemove = fullSync ? active.filter((t) => !inFile.has(t.chassis_number)) : [];
 
   if (fullSync && active.length > 0 && toRemove.length / active.length > MAX_REMOVAL_RATIO) {
@@ -89,12 +98,11 @@ export async function upsertChassisList(
     if (error) throw new Error(error.message);
   }
 
-  // Restoring only happens on a full sync; a manual import of a previously
-  // deleted chassis number also restores it, which is the intuitive behaviour.
+  // A removed truck that reappears (in the sync or a manual import) is reactivated.
   if (toRestore.length > 0) {
     const { error } = await supabase
       .from("trucks")
-      .update({ deleted_at: null })
+      .update({ status: "active" })
       .eq("manager_id", managerId)
       .in("id", toRestore.map((t) => t.id));
     if (error) throw new Error(error.message);
@@ -103,9 +111,9 @@ export async function upsertChassisList(
   if (toRemove.length > 0) {
     const { error } = await supabase
       .from("trucks")
-      .update({ deleted_at: new Date().toISOString() })
+      .update({ status: REMOVED })
       .eq("manager_id", managerId)
-      .is("deleted_at", null)
+      .eq("status", "active")
       .in("id", toRemove.map((t) => t.id));
     if (error) throw new Error(error.message);
   }

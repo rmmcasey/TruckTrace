@@ -458,9 +458,24 @@ export default function ManagerDashboardPage() {
                 {!trucksLoading && trucks.length === 0 && (
                   <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">No trucks found. Import a CSV to get started.</td></tr>
                 )}
-                {!trucksLoading && trucks.map((truck) => (
-                  <tr key={truck.truck_id} className="border-t border-gray-100 hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-mono font-medium text-gray-900">{truck.chassis_number}</td>
+                {!trucksLoading && trucks.map((truck) => {
+                  const removed = truck.status === "removed";
+                  return (
+                  <tr
+                    key={truck.truck_id}
+                    className={`border-t border-gray-100 transition-colors ${
+                      removed ? "bg-gray-50 opacity-50" : "hover:bg-gray-50"
+                    }`}
+                    title={removed ? "No longer in the SharePoint file" : undefined}
+                  >
+                    <td className="px-4 py-3 font-mono font-medium text-gray-900 whitespace-nowrap">
+                      {truck.chassis_number}
+                      {removed && (
+                        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-sans font-medium bg-gray-200 text-gray-600">
+                          Removed
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-gray-700">{truck.location_name ?? "—"}</td>
                     <td className="px-4 py-3 text-gray-700 font-mono">{truck.tan_number ?? "—"}</td>
                     <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(truck.location_logged_at)}</td>
@@ -476,7 +491,8 @@ export default function ManagerDashboardPage() {
                       ) : "—"}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -22,7 +22,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const result = (data ?? []).map((truck) => {
+  // Active trucks first, trucks removed from the sync file at the bottom.
+  const sorted = [...(data ?? [])].sort(
+    (a, b) => Number(a.status === "removed") - Number(b.status === "removed")
+  );
+
+  const result = sorted.map((truck) => {
     const loc = (Array.isArray(truck.locations) ? truck.locations[0] : truck.locations) as
       | { name: string; tan_number: string }
       | null;
